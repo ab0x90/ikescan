@@ -302,8 +302,14 @@ def analyze(r: ScanResults) -> tuple[list[Finding], list[AttackStep]]:
           "security properties and no Aggressive Mode vulnerability.")
 
     # ── DH group weakness ─────────────────────────────────────────────────────
-    weak_dh = any(t[0] in ("1", "2", "5") or t[5] in (1, 2, 5)
-                  for t in r.mm_accepted)
+    # mm_accepted entries are (spec, label, risk, sa); extract DH from spec's last field
+    def _dh(spec: str) -> int:
+        try:
+            return int(spec.split(",")[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    weak_dh = any(_dh(t[0]) in (1, 2, 5) for t in r.mm_accepted)
     if weak_dh:
         F("MEDIUM", "Weak DH groups accepted (Group 1/2/5, <2048-bit)",
           "NIST recommends DH Group 14 (2048-bit) or higher.")
