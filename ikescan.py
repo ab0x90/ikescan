@@ -149,6 +149,7 @@ class ScanResults:
     nat_t: bool = False
     mm_accepted: list = field(default_factory=list)    # list of (spec, label, risk, sa_dict)
     aggr_accepted: list = field(default_factory=list)  # list of (group, sa_dict, psk_file)
+    accepts_any_group: bool = False   # True if garbage ID also triggers a handshake
     vendor_ids: list = field(default_factory=list)
     raw_outputs: dict = field(default_factory=dict)
 
@@ -195,6 +196,20 @@ def probe_aggressive(r: ScanResults, psk_dir: str, verbose: bool, groups: list |
             for v in parse_vids(out):
                 if v not in r.vendor_ids:
                     r.vendor_ids.append(v)
+
+    # Garbage-ID validation: if aggressive mode fired, check whether the
+    # responder accepts literally any group name (catch-all / junk hash risk).
+    if r.aggressive_mode:
+        console.print("  [dim]→ Validating hash (garbage group ID probe)...[/]")
+        garbage_id = "zzzikescan_notreal_7x9q2"
+        out = run_scan([
+            r.target, f"--dport={r.port}",
+            "--aggressive",
+            f"--id={garbage_id}",
+        ])
+        if responded(out):
+            r.accepts_any_group = True
+            console.print("  [yellow]→ Responder accepted garbage group ID — hash confidence LOW[/]")
 
 def probe_ikev2(r: ScanResults):
     console.print("  [dim]→ IKEv2 detection...[/]")
@@ -262,8 +277,25 @@ def analyze(r: ScanResults) -> tuple[list[Finding], list[AttackStep]]:
                     f"hashcat -m 5300 {pf} /usr/share/wordlists/rockyou.txt  # MD5-based",
                     f"hashcat -m 5400 {pf} /usr/share/wordlists/rockyou.txt  # SHA1-based",
                 ]
-            S("CRITICAL", "Crack Aggressive Mode PSK hash", crack_cmds,
-              "Hashcat rule: add -r /usr/share/hashcat/rules/best64.rule for better coverage.")
+            # Hash confidence assessment
+            if r.accepts_any_group:
+                F("MEDIUM",
+                  "Hash confidence LOW — responder accepts any group ID",
+                  "The target returned a handshake for a garbage group name, suggesting a "
+                  "catch-all policy or null/shared PSK. The captured hash may not reflect "
+                  "a real credential. Attempt cracking but treat results with caution.")
+                crack_note = ("WARNING: hash confidence low — garbage group ID also triggered "
+                              "a handshake. Crack attempt still worthwhile (catch-all PSK may "
+                              "still be set); confirm any cracked value by completing a real "
+                              "IKE exchange.")
+            else:
+                F("INFO",
+                  "Hash validated — responder requires a known group ID",
+                  "Garbage group ID probe returned no handshake. The captured hash is "
+                  "computed with the real PSK for the identified group.")
+                crack_note = ("Hashcat rule: add -r /usr/share/hashcat/rules/best64.rule "
+                              "for better coverage.")
+            S("CRITICAL", "Crack Aggressive Mode PSK hash", crack_cmds, crack_note)
         else:
             F("HIGH", "Aggressive Mode enabled (non-PSK auth)",
               "Even without PSK, Aggressive Mode leaks the gateway identity and group name.")
