@@ -154,22 +154,20 @@ class ScanResults:
     raw_outputs: dict = field(default_factory=dict)
 
 def probe_main_mode(r: ScanResults, verbose: bool):
-    console.print("  [dim]→ IKEv1 Main Mode detection...[/]")
-    # First: broad detection probe with ike-scan defaults
-    out = run_scan([r.target, f"--dport={r.port}"])
-    r.raw_outputs["mm_detect"] = out
-    if not responded(out):
-        return
-    r.main_mode = True
-    r.vendor_ids = parse_vids(out)
-
-    console.print("  [dim]→ Enumerating accepted transforms...[/]")
+    console.print("  [dim]→ IKEv1 Main Mode — enumerating transforms...[/]")
+    # Enumerate each transform directly rather than doing a default-transform
+    # detection probe first. The default ike-scan transform often doesn't match
+    # what a target accepts, causing the detection step to silently return no
+    # result even when port 500 is open. Any successful transform response
+    # confirms Main Mode and we collect VIDs at the same time.
     for spec, label, enc, hsh, auth, dh, risk in TRANSFORMS:
         out = run_scan([r.target, f"--dport={r.port}", f"--trans={spec}"])
         if responded(out):
+            if not r.main_mode:
+                r.main_mode = True
+                r.vendor_ids = parse_vids(out)
             sa = parse_sa(out)
             r.mm_accepted.append((spec, label, risk, sa))
-            # Pick up any extra VIDs
             for v in parse_vids(out):
                 if v not in r.vendor_ids:
                     r.vendor_ids.append(v)
